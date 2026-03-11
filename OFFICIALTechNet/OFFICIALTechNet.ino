@@ -219,16 +219,26 @@ static void menu_drawRowAt(const char** items, int itemIndex, int selectedIndex,
 
   tft.fillRect(0, y - 6, W, 28, TFT_BLACK);
 
+  int rowX = 8;
+  int rowW = W - 16;
+
   if (itemIndex == selectedIndex) {
-    tft.fillRoundRect(8, y - 5, W - 16, 26, 6, COLOR_SELECTED_BG);
+    tft.fillRoundRect(rowX, y - 5, rowW, 26, 6, COLOR_SELECTED_BG);
     tft.setTextColor(TFT_YELLOW);
   } else {
     tft.setTextColor(TFT_WHITE);
   }
 
   tft.setTextSize(2);
-  tft.setCursor(18, y);
-  tft.print(items[itemIndex]);
+
+  String label = items[itemIndex];
+  int textWidth = label.length() * 12;   // textSize(2) ≈ 12 px per char
+  int x = rowX + (rowW - textWidth) / 2;
+
+  if (x < rowX) x = rowX;
+
+  tft.setCursor(x, y);
+  tft.print(label);
 }
 
 static void drawMenuItems(const char** items, int count, int selectedIndex) {
