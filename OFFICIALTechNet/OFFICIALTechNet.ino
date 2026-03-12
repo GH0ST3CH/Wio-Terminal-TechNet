@@ -64,6 +64,66 @@ static const int UI_FOOTER_H  = 25;  // height of the footer bar
 static const int UI_CONTENT_Y = 45;  // top of the scrollable content area
 static const int UI_CONTENT_H = 170; // height of the scrollable content area
 
+// ======= App framework =======
+enum AppId { APP_MENU, APP_CHANNEL_MONITOR, APP_SSID_MONITOR, APP_SSID_SCAN, APP_BT_MONITOR, APP_BT_SCAN, APP_BADUSB, APP_WIOCHAT, APP_WIODROP, APP_SDTOOL };
+AppId app = APP_MENU;
+
+// ======= Serial debug/logging =======
+#define TN_SERIAL_BAUD 115200
+#define TN_SERIAL_WAIT_MS 1500
+
+static bool tn_serialReady = false;
+
+static const char* tn_appName(AppId id) {
+  switch (id) {
+    case APP_MENU:            return "MENU";
+    case APP_CHANNEL_MONITOR: return "CHANNEL_MONITOR";
+    case APP_SSID_MONITOR:    return "SSID_MONITOR";
+    case APP_SSID_SCAN:       return "SSID_SCANNER";
+    case APP_BT_MONITOR:      return "BLE_MAC_MONITOR";
+    case APP_BT_SCAN:         return "BLE_MAC_SCANNER";
+    case APP_BADUSB:          return "WIO_BADUSB";
+    case APP_WIOCHAT:         return "WIO_CHAT";
+    case APP_WIODROP:         return "WIO_DROP";
+    case APP_SDTOOL:          return "SD_TOOL";
+    default:                  return "UNKNOWN";
+  }
+}
+
+static void tn_log(const String& tag, const String& msg) {
+  if (!tn_serialReady) return;
+  Serial.print("[");
+  Serial.print(millis());
+  Serial.print("] [");
+  Serial.print(tag);
+  Serial.print("] ");
+  Serial.println(msg);
+}
+
+static void tn_logf(const String& tag, const String& k, const String& v) {
+  if (!tn_serialReady) return;
+  Serial.print("[");
+  Serial.print(millis());
+  Serial.print("] [");
+  Serial.print(tag);
+  Serial.print("] ");
+  Serial.print(k);
+  Serial.print(": ");
+  Serial.println(v);
+}
+
+static void tn_logAppEnter(AppId id) {
+  tn_log("APP", String("Enter ") + tn_appName(id));
+}
+
+static void tn_logAppExit(AppId id) {
+  tn_log("APP", String("Exit ") + tn_appName(id));
+}
+
+static void tn_logKeyPress(const char* name) {
+  tn_log("INPUT", String("Pressed ") + name);
+}
+
 // ======= Input bitmasks =======
 static const uint16_t MASK_BTN_A     = 0x0001;
 static const uint16_t MASK_BTN_B     = 0x0002;
@@ -146,13 +206,9 @@ static void drawBootLogo() {
   }
 
   tn_drawSubtitle();
-  delay(1200);          // optional boot hold
+  delay(1200);               // optional boot hold
   tft.fillScreen(TFT_BLACK); // optional clear after
 }
-
-// ======= App framework =======
-enum AppId { APP_MENU, APP_CHANNEL_MONITOR, APP_SSID_MONITOR, APP_SSID_SCAN, APP_BT_MONITOR, APP_BT_SCAN, APP_BADUSB, APP_WIOCHAT, APP_WIODROP, APP_SDTOOL };
-AppId app = APP_MENU;
 
 struct Keys {
   uint16_t now = 0, last = 0;
@@ -177,15 +233,26 @@ static inline void readInputs() {
   if (digitalRead(JOY_RIGHT) == LOW) keys.now |= MASK_JOY_RIGHT;
   if (digitalRead(JOY_OK)    == LOW) keys.now |= MASK_JOY_OK;
   if (keys.now) bt_lastKeyMs = millis();
+
+  if (keys.pressed(MASK_BTN_A))     tn_logKeyPress("BTN_A");
+  if (keys.pressed(MASK_BTN_B))     tn_logKeyPress("BTN_B");
+  if (keys.pressed(MASK_BTN_C))     tn_logKeyPress("BTN_C");
+  if (keys.pressed(MASK_JOY_UP))    tn_logKeyPress("JOY_UP");
+  if (keys.pressed(MASK_JOY_DOWN))  tn_logKeyPress("JOY_DOWN");
+  if (keys.pressed(MASK_JOY_LEFT))  tn_logKeyPress("JOY_LEFT");
+  if (keys.pressed(MASK_JOY_RIGHT)) tn_logKeyPress("JOY_RIGHT");
+  if (keys.pressed(MASK_JOY_OK))    tn_logKeyPress("JOY_OK");
 }
 
 static inline void wifiInitOnce() {
   static bool inited = false;
   if (inited) return;
+  tn_log("WIFI", "Initializing STA mode");
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(50);
   inited = true;
+  tn_log("WIFI", "STA ready and disconnected");
 }
 
 // ===================== MENU =====================
@@ -310,10 +377,10 @@ static void menu_draw() {
 static void menu_loop() {
   // Category left
   if (keys.pressed(MASK_JOY_LEFT) || keys.pressed(MASK_BTN_C)) {
-menuCat = (menuCat == CAT_WIFI)  ? CAT_OTHER :
-          (menuCat == CAT_OTHER) ? CAT_USB   :
-          (menuCat == CAT_USB)   ? CAT_BT    :
-                                   CAT_WIFI;
+    menuCat = (menuCat == CAT_WIFI)  ? CAT_OTHER :
+              (menuCat == CAT_OTHER) ? CAT_USB   :
+              (menuCat == CAT_USB)   ? CAT_BT    :
+                                       CAT_WIFI;
     menuIndex = 0;
     menuScroll = 0;
 
@@ -325,9 +392,9 @@ menuCat = (menuCat == CAT_WIFI)  ? CAT_OTHER :
   // Category right
   if (keys.pressed(MASK_JOY_RIGHT) || keys.pressed(MASK_BTN_A)) {
     menuCat = (menuCat == CAT_WIFI) ? CAT_BT    :
-          (menuCat == CAT_BT)   ? CAT_USB   :
-          (menuCat == CAT_USB)  ? CAT_OTHER :
-                                  CAT_WIFI;
+              (menuCat == CAT_BT)   ? CAT_USB   :
+              (menuCat == CAT_USB)  ? CAT_OTHER :
+                                      CAT_WIFI;
     menuIndex = 0;
     menuScroll = 0;
 
@@ -342,53 +409,53 @@ menuCat = (menuCat == CAT_WIFI)  ? CAT_OTHER :
   menu_getItems(menuCat, &items, &count);
   if (count <= 0) return;
 
-if (keys.pressed(MASK_JOY_UP)) {
-  int oldIndex = menuIndex;
-  int oldScroll = menuScroll;
+  if (keys.pressed(MASK_JOY_UP)) {
+    int oldIndex = menuIndex;
+    int oldScroll = menuScroll;
 
-  menuIndex = (menuIndex - 1 + count) % count;
+    menuIndex = (menuIndex - 1 + count) % count;
 
-  if (menuIndex < menuScroll) menuScroll = menuIndex;
-  if (menuIndex >= menuScroll + MENU_VISIBLE) menuScroll = menuIndex - MENU_VISIBLE + 1;
+    if (menuIndex < menuScroll) menuScroll = menuIndex;
+    if (menuIndex >= menuScroll + MENU_VISIBLE) menuScroll = menuIndex - MENU_VISIBLE + 1;
 
-  // handle wrap (0 -> last)
-  if (oldIndex == 0 && menuIndex == count - 1) {
-    menuScroll = (count > MENU_VISIBLE) ? (count - MENU_VISIBLE) : 0;
+    // handle wrap (0 -> last)
+    if (oldIndex == 0 && menuIndex == count - 1) {
+      menuScroll = (count > MENU_VISIBLE) ? (count - MENU_VISIBLE) : 0;
+    }
+
+    if (menuScroll != oldScroll) {
+      menu_redrawItemsOnly();
+    } else {
+      int oldRow = oldIndex - menuScroll;
+      int newRow = menuIndex - menuScroll;
+      if (oldRow >= 0 && oldRow < MENU_VISIBLE) menu_drawRowAt(items, oldIndex, menuIndex, oldRow);
+      if (newRow >= 0 && newRow < MENU_VISIBLE) menu_drawRowAt(items, menuIndex, menuIndex, newRow);
+    }
   }
 
-  if (menuScroll != oldScroll) {
-    menu_redrawItemsOnly();
-  } else {
-    int oldRow = oldIndex - menuScroll;
-    int newRow = menuIndex - menuScroll;
-    if (oldRow >= 0 && oldRow < MENU_VISIBLE) menu_drawRowAt(items, oldIndex, menuIndex, oldRow);
-    if (newRow >= 0 && newRow < MENU_VISIBLE) menu_drawRowAt(items, menuIndex, menuIndex, newRow);
+  if (keys.pressed(MASK_JOY_DOWN)) {
+    int oldIndex = menuIndex;
+    int oldScroll = menuScroll;
+
+    menuIndex = (menuIndex + 1) % count;
+
+    if (menuIndex < menuScroll) menuScroll = menuIndex;
+    if (menuIndex >= menuScroll + MENU_VISIBLE) menuScroll = menuIndex - MENU_VISIBLE + 1;
+
+    // handle wrap (last -> 0)
+    if (oldIndex == count - 1 && menuIndex == 0) {
+      menuScroll = 0;
+    }
+
+    if (menuScroll != oldScroll) {
+      menu_redrawItemsOnly();
+    } else {
+      int oldRow = oldIndex - menuScroll;
+      int newRow = menuIndex - menuScroll;
+      if (oldRow >= 0 && oldRow < MENU_VISIBLE) menu_drawRowAt(items, oldIndex, menuIndex, oldRow);
+      if (newRow >= 0 && newRow < MENU_VISIBLE) menu_drawRowAt(items, menuIndex, menuIndex, newRow);
+    }
   }
-}
-
-if (keys.pressed(MASK_JOY_DOWN)) {
-  int oldIndex = menuIndex;
-  int oldScroll = menuScroll;
-
-  menuIndex = (menuIndex + 1) % count;
-
-  if (menuIndex < menuScroll) menuScroll = menuIndex;
-  if (menuIndex >= menuScroll + MENU_VISIBLE) menuScroll = menuIndex - MENU_VISIBLE + 1;
-
-  // handle wrap (last -> 0)
-  if (oldIndex == count - 1 && menuIndex == 0) {
-    menuScroll = 0;
-  }
-
-  if (menuScroll != oldScroll) {
-    menu_redrawItemsOnly();
-  } else {
-    int oldRow = oldIndex - menuScroll;
-    int newRow = menuIndex - menuScroll;
-    if (oldRow >= 0 && oldRow < MENU_VISIBLE) menu_drawRowAt(items, oldIndex, menuIndex, oldRow);
-    if (newRow >= 0 && newRow < MENU_VISIBLE) menu_drawRowAt(items, menuIndex, menuIndex, newRow);
-  }
-}
 
   // Launch
   if (keys.pressed(MASK_JOY_OK)) {
@@ -398,7 +465,7 @@ if (keys.pressed(MASK_JOY_DOWN)) {
           : (menuIndex == 2) ? APP_SSID_SCAN
           : (menuIndex == 3) ? APP_WIOCHAT
                              : APP_WIODROP;
-        } else if (menuCat == CAT_BT) {
+    } else if (menuCat == CAT_BT) {
       app = (menuIndex == 0) ? APP_BT_MONITOR
                              : APP_BT_SCAN;
     } else if (menuCat == CAT_USB) {
@@ -406,6 +473,9 @@ if (keys.pressed(MASK_JOY_DOWN)) {
     } else {
       app = APP_SDTOOL;
     }
+
+    tn_log("MENU", String("Launch request cat=") + String(menuCat) + " index=" + String(menuIndex));
+    tn_logAppEnter(app);
     tft.fillScreen(TFT_BLACK);
   }
 }
@@ -479,26 +549,33 @@ static void cm_enter() {
   memset(cm_apCount, 0, sizeof(cm_apCount));
   cm_draw();
   cm_isScanning = false;
+  tn_logAppEnter(APP_CHANNEL_MONITOR);
+  tn_log("WIFI", "Channel Monitor ready");
 }
 
 static void cm_loop() {
   if (keys.pressed(MASK_BTN_B)) {
     cm_band = (cm_band == CM_BAND_24 ? CM_BAND_5 : CM_BAND_24);
+    tn_log("WIFI", String("Channel Monitor band change to ") + (cm_band == CM_BAND_24 ? "2.4GHz" : "5GHz"));
     cm_draw();
   }
 
   if (keys.pressed(MASK_BTN_C) || keys.pressed(MASK_JOY_OK)) {
+    tn_logAppExit(APP_CHANNEL_MONITOR);
     app = APP_MENU;
     menu_draw();
+    tn_logAppEnter(APP_MENU);
   }
 
   if (!cm_isScanning) {
+    tn_log("WIFI", String("Starting async channel scan band=") + (cm_band == CM_BAND_24 ? "2.4GHz" : "5GHz"));
     WiFi.scanNetworks(true);
     cm_isScanning = true;
   } else {
     int n = WiFi.scanComplete();
 
     if (n >= 0) {
+      tn_log("WIFI", String("Channel scan complete, AP records=") + String(n));
       memset(cm_apCount, 0, sizeof(cm_apCount));
 
       for (int i = 0; i < n; i++) {
@@ -689,6 +766,7 @@ static void mon_updateDetailRSSIOnly() {
 
 static void mon_kickScanIfNeeded() {
   if (!mon_scanning) {
+    tn_log("WIFI", "SSID Monitor async scan start");
     WiFi.scanNetworks(true);
     mon_scanning = true;
   }
@@ -696,6 +774,7 @@ static void mon_kickScanIfNeeded() {
 
 static void mon_kickDetailScanIfNeeded() {
   if (!mon_scanning) {
+    tn_log("WIFI", "SSID Monitor detail refresh scan start");
     WiFi.scanNetworks(true, false, false, 120);
     mon_scanning = true;
   }
@@ -704,6 +783,8 @@ static void mon_kickDetailScanIfNeeded() {
 static void mon_onScanComplete() {
   int n = WiFi.scanComplete();
   if (n < 0) return;
+
+  tn_log("WIFI", String("SSID Monitor scan complete, APs=") + String(n));
 
   mon_rows.clear();
   mon_rows.reserve((size_t)n);
@@ -758,6 +839,8 @@ static void mon_enter() {
 
   mon_drawList();
   mon_kickScanIfNeeded();
+  tn_logAppEnter(APP_SSID_MONITOR);
+  tn_log("WIFI", "SSID Monitor ready");
 }
 
 static void mon_loop() {
@@ -782,6 +865,7 @@ static void mon_loop() {
     }
 
     if (keys.pressed(MASK_JOY_OK) && total > 0) {
+      tn_log("WIFI", String("SSID detail open: ") + mon_rows[mon_sel].bssid);
       mon_selBSSID = mon_rows[mon_sel].bssid;
       mon_detail   = mon_rows[mon_sel];
       mon_detailOn = true;
@@ -789,8 +873,10 @@ static void mon_loop() {
     }
 
     if (keys.pressed(MASK_BTN_C)) {
+      tn_logAppExit(APP_SSID_MONITOR);
       app = APP_MENU;
       menu_draw();
+      tn_logAppEnter(APP_MENU);
       return;
     }
   }
@@ -936,7 +1022,10 @@ static void ss_scanOnce() {
 
   ss_networks.clear();
 
+  tn_log("WIFI", "SSID Scanner blocking scan start");
   int n = WiFi.scanNetworks();
+  tn_log("WIFI", String("SSID Scanner blocking scan complete, APs=") + String(n));
+
   for (int i = 0; i < n; i++) {
     APInfo ap;
     ap.ssid  = WiFi.SSID(i);
@@ -970,6 +1059,8 @@ static void ss_enter() {
 
   delay(1000);
   ss_scanOnce();
+  tn_logAppEnter(APP_SSID_SCAN);
+  tn_log("WIFI", "SSID Scanner ready");
 }
 
 static void ss_loop() {
@@ -998,8 +1089,10 @@ static void ss_loop() {
   }
 
   if (keys.pressed(MASK_BTN_C)) {
+    tn_logAppExit(APP_SSID_SCAN);
     app = APP_MENU;
     menu_draw();
+    tn_logAppEnter(APP_MENU);
   }
 
   if (keys.pressed(MASK_BTN_A)) {
@@ -1236,7 +1329,9 @@ static void bt_scanNowAndUpdate() {
   BLEScan* scanner = BLEDevice::getScan();
   scanner->setActiveScan(true);
 
+  tn_log("BLE", "Active BLE scan start (1s)");
   BLEScanResults res = scanner->start(1, false);
+  tn_log("BLE", String("Active BLE scan complete, devices=") + String(res.getCount()));
 
   std::vector<BLERow> rows;
   rows.reserve(res.getCount());
@@ -1303,10 +1398,12 @@ static void bt_enter() {
   if (!bt_inited) {
     BLEDevice::init("");
     bt_inited = true;
+    tn_log("BLE", "BLEDevice initialized for monitor");
   }
 
   if (!bt_scanTaskHandle) {
     xTaskCreate(bt_scanTask, "btScan", 4096, NULL, 1, &bt_scanTaskHandle);
+    tn_log("BLE", "BLE scan task created");
   }
 
   bt_rows.clear();
@@ -1321,6 +1418,8 @@ static void bt_enter() {
   bt_lastDetailScanMs = 0;
   bt_lastKeyMs        = 0;
   bt_drawList();
+  tn_logAppEnter(APP_BT_MONITOR);
+  tn_log("BLE", "BLE MAC Monitor ready");
 }
 
 static void bt_loop() {
@@ -1345,6 +1444,7 @@ static void bt_loop() {
     }
 
     if (keys.pressed(MASK_JOY_OK) && total > 0) {
+      tn_log("BLE", String("MAC detail open: ") + bt_rows[bt_sel].mac);
       bt_selMAC   = bt_rows[bt_sel].mac;
       bt_detail   = bt_rows[bt_sel];
       bt_detailOn = true;
@@ -1353,10 +1453,12 @@ static void bt_loop() {
     }
 
     if (keys.pressed(MASK_BTN_C)) {
+      tn_logAppExit(APP_BT_MONITOR);
       app = APP_MENU;
       menu_draw();
+      tn_logAppEnter(APP_MENU);
     }
-}
+  }
 
   uint32_t now = millis();
 
@@ -1364,7 +1466,7 @@ static void bt_loop() {
 
   if (allowScan) {
     uint32_t  period = bt_detailOn ? BT_DETAIL_SCAN_PERIOD_MS : BT_SCAN_PERIOD_MS;
-    uint32_t* lastp  = bt_detailOn ? &bt_lastDetailScanMs      : &bt_lastScanMs;
+    uint32_t* lastp  = bt_detailOn ? &bt_lastDetailScanMs     : &bt_lastScanMs;
     if (*lastp == 0 || (now - *lastp) >= period) {
       *lastp = now;
       if (bt_scanTaskHandle && !bt_scanBusy) xTaskNotifyGive(bt_scanTaskHandle);
@@ -1375,7 +1477,13 @@ static void bt_loop() {
 }
 
 // ===================== BLE MAC SCANNER =====================
-struct BTScanRow { String mac; int rssi; };
+struct BTScanRow {
+  String mac;
+  int    rssi;
+
+  String name;
+  String listLabel;
+};
 
 static std::vector<BTScanRow> bts_rows;
 static int  bts_sel        = 0;
@@ -1393,6 +1501,13 @@ static const int BTS_HDR_Y    = 52;
 static const int BTS_ROW0_Y   = 74;
 static const int BTS_ROW_STEP = 18;
 static const int BTS_HI_PAD_Y = 4;
+
+static const int BTS_LIST_LABEL_MAX_CHARS = 20;
+
+static const int BTS_DET_X_LABEL = 10;
+static const int BTS_DET_Y_NAME  = 62;
+static const int BTS_DET_Y_MAC   = 92;
+static const int BTS_DET_Y_RSSI  = 122;
 
 static void bts_drawScrollBar(int total, int start) {
   const int x = 308;
@@ -1422,7 +1537,6 @@ static void bts_drawBodyHeader() {
 }
 
 static void bts_drawScanning() {
-  // No body headers while scanning (per request)
   drawSkinHeader("BLE MAC Scanner");
   tft.fillRect(0, UI_CONTENT_Y, W, UI_CONTENT_H, TFT_BLACK);
 
@@ -1438,7 +1552,6 @@ static void bts_draw() {
   if (bts_showDetail) {
     BTScanRow& d = bts_rows[bts_sel];
 
-    String badge = (d.mac.length() ? (String(d.rssi) + " dBm") : String("N/A"));
     drawSkinHeader("MAC Details");
 
     tft.fillRect(0, UI_CONTENT_Y, W, UI_CONTENT_H, TFT_BLACK);
@@ -1446,11 +1559,16 @@ static void bts_draw() {
     tft.setTextColor(TFT_WHITE);
     tft.setTextSize(2);
 
-    tft.setCursor(10, 80);
+    tft.setCursor(BTS_DET_X_LABEL, BTS_DET_Y_NAME);
+    tft.print("Name: ");
+    if (d.name.length()) tft.print(tn_fitText(d.name, 16));
+    else                 tft.print("N/A");
+
+    tft.setCursor(BTS_DET_X_LABEL, BTS_DET_Y_MAC);
     tft.print("MAC: ");
     tft.print(d.mac);
 
-    tft.setCursor(10, 140);
+    tft.setCursor(BTS_DET_X_LABEL, BTS_DET_Y_RSSI);
     tft.print("RSSI: ");
     tft.print(d.rssi);
     tft.print(" dBm");
@@ -1476,13 +1594,14 @@ static void bts_draw() {
       tft.fillRoundRect(5, y - BTS_HI_PAD_Y, W - 10, 16, 4, COLOR_SELECTED_BG);
       tft.setTextColor(TFT_YELLOW);
     } else {
-      tft.setTextColor(TFT_WHITE);
+      if (bts_rows[i].name.length()) tft.setTextColor(TFT_GREEN);
+      else                           tft.setTextColor(TFT_WHITE);
     }
 
     tft.setTextSize(1);
 
     tft.setCursor(BTS_COL_MAC_X, y);
-    tft.print(bts_rows[i].mac);
+    tft.print(bts_rows[i].listLabel);
 
     tft.setCursor(BTS_COL_RSSI_X, y);
     tft.print(bts_rows[i].rssi);
@@ -1500,19 +1619,33 @@ static void bts_scanOnce() {
   if (!bts_inited) {
     BLEDevice::init("");
     bts_inited = true;
+    tn_log("BLE", "BLEDevice initialized for scanner");
   }
 
   BLEScan* scanner = BLEDevice::getScan();
   scanner->setActiveScan(false);
 
+  tn_log("BLE", "Passive BLE scan start (3s)");
   BLEScanResults res = scanner->start(3, false);
+  tn_log("BLE", String("Passive BLE scan complete, devices=") + String(res.getCount()));
 
   bts_rows.reserve(res.getCount());
   for (int i = 0; i < res.getCount(); i++) {
     BLEAdvertisedDevice d = res.getDevice(i);
+
     BTScanRow r;
     r.mac  = String(d.getAddress().toString().c_str());
     r.rssi = d.getRSSI();
+
+    String _nm = String(d.getName().c_str());
+    if (_nm.length()) {
+      r.name      = _nm;
+      r.listLabel = tn_fitText(r.name, BTS_LIST_LABEL_MAX_CHARS);
+    } else {
+      r.name      = "";
+      r.listLabel = tn_fitText(r.mac, BTS_LIST_LABEL_MAX_CHARS);
+    }
+
     bts_rows.push_back(r);
   }
 
@@ -1537,11 +1670,16 @@ static void bts_enter() {
 
   delay(1000);
   bts_scanOnce();
+  tn_logAppEnter(APP_BT_SCAN);
+  tn_log("BLE", "BLE MAC Scanner ready");
 }
 
 static void bts_loop() {
   if (bts_showDetail) {
-    if (keys.now != 0) { bts_showDetail = false; bts_draw(); }
+    if (keys.now != 0) {
+      bts_showDetail = false;
+      bts_draw();
+    }
     return;
   }
 
@@ -1564,15 +1702,16 @@ static void bts_loop() {
     bts_draw();
   }
 
-  // RB (BTN_A): rescan
   if (keys.pressed(MASK_BTN_A)) {
     bts_scanOnce();
     return;
   }
 
   if (keys.pressed(MASK_BTN_C)) {
+    tn_logAppExit(APP_BT_SCAN);
     app = APP_MENU;
     menu_draw();
+    tn_logAppEnter(APP_MENU);
   }
 }
 
@@ -1859,18 +1998,20 @@ static void bu_draw(const String& stOverride = "", const String& msgOverride = "
 
 static void bu_runFile(const String& fullPath) {
   File f = SD.open(fullPath.c_str());
-  if (!f) { bu_draw("ERROR", "Can\x27t open file: " + fullPath); return; }
+  if (!f) {
+    tn_log("BADUSB", String("ERROR opening payload: ") + fullPath);
+    bu_draw("ERROR", "Can\x27t open file: " + fullPath);
+    return;
+  }
+
+  tn_log("BADUSB", String("Run payload: ") + fullPath);
 
   int    lc           = 0;   // line counter (for display)
   int    defaultDelay = 0;   // inter-command delay in ms
   String lastCmd      = "";  // for REPEAT
   String lastArg      = "";
 
-  // Lambda-style helper — execute a single parsed command.
-  // We encapsulate in a local struct so we can call it from REPEAT too.
-  // (C++11 lambdas work on the Wio/SAMD toolchain.)
   auto execCmd = [&](String cu, String a) {
-    // cu is already upper-cased command token; a is the rest of the line
     if (cu == "STRING") {
       Keyboard.print(a);
     } else if (cu == "STRINGLN") {
@@ -1881,8 +2022,6 @@ static void bu_runFile(const String& fullPath) {
     } else if (cu == "DEFAULTDELAY" || cu == "DEFAULT_DELAY") {
       defaultDelay = a.toInt();
     } else {
-      // Chord: first token is cu, remaining tokens are in a.
-      // Re-join them so bu_pressChord can split uniformly.
       String chord = cu;
       if (a.length() > 0) { chord += " "; chord += a; }
       if (!bu_pressChord(chord)) {
@@ -1905,6 +2044,8 @@ static void bu_runFile(const String& fullPath) {
     String cuUp = cu;
     cuUp.toUpperCase();
 
+    tn_log("BADUSB", String("Line ") + String(lc + 1) + " cmd=" + cuUp + (a.length() ? (" arg=" + a) : ""));
+
     bu_draw("RUNNING", "Line " + String(++lc) + ": " + cu);
 
     if (cuUp == "REPEAT") {
@@ -1914,13 +2055,11 @@ static void bu_runFile(const String& fullPath) {
         execCmd(lastCmd, lastArg);
         if (defaultDelay > 0) delay(defaultDelay);
       }
-      // Do NOT update lastCmd/lastArg for REPEAT itself
       continue;
     }
 
     execCmd(cuUp, a);
 
-    // Store for potential REPEAT
     lastCmd = cuUp;
     lastArg = a;
 
@@ -1928,6 +2067,7 @@ static void bu_runFile(const String& fullPath) {
   }
 
   f.close();
+  tn_log("BADUSB", String("Payload complete: ") + fullPath);
   bu_draw("DONE");
   delay(1500);
   bu_draw("READY", "");
@@ -1937,6 +2077,7 @@ static void bu_runFile(const String& fullPath) {
 // APP ENTRY & LOOP
 // =====================================================================
 static void bu_enter() {
+  tn_logAppEnter(APP_BADUSB);
   Keyboard.begin();
   bu_setStatus("READY", "");
   if (SD.begin(SDCARD_SS_PIN, SDCARD_SPI)) {
@@ -1954,6 +2095,7 @@ static void bu_enter() {
   bu_s = 0; bu_scroll = 0;
   if (!bu_sd) bu_draw("ERROR", "SD card not detected. Insert SD card and restart.");
   else        bu_draw("READY", "");
+  if (bu_sd) tn_log("BADUSB", String("SD ready, dir=") + bu_dir);
 }
 
 static void bu_loop() {
@@ -1970,9 +2112,14 @@ static void bu_loop() {
     bu_draw();
   }
 
-  // BTN_C (Left button): back up one folder or exit to menu
   if (keys.pressed(MASK_BTN_C)) {
-    if (!bu_sd) { app = APP_MENU; menu_draw(); return; }
+    if (!bu_sd) {
+      tn_logAppExit(APP_BADUSB);
+      app = APP_MENU;
+      menu_draw();
+      tn_logAppEnter(APP_MENU);
+      return;
+    }
     if (bu_dir != "/") {
       bu_dir = bu_parentDir(bu_dir);
       String err;
@@ -1980,12 +2127,13 @@ static void bu_loop() {
       bu_s = 0; bu_scroll = 0;
       bu_draw();
     } else {
+      tn_logAppExit(APP_BADUSB);
       app = APP_MENU;
       menu_draw();
+      tn_logAppEnter(APP_MENU);
     }
   }
 
-  // JOY_OK: open directory or run payload
   if (keys.pressed(MASK_JOY_OK) && bu_sd && bu_c > 0) {
     String name = bu_f[bu_s];
 
@@ -2004,7 +2152,6 @@ static void bu_loop() {
       if (bu_dir == "/") fullPath = "/" + name;
       else               fullPath = bu_dir + "/" + name;
 
-      // Normalize any SdFat-style prefixes
       int pfx = fullPath.indexOf("://");
       if (pfx != -1) fullPath = fullPath.substring(pfx + 3);
       if (!fullPath.startsWith("/")) fullPath = "/" + fullPath;
@@ -2165,6 +2312,7 @@ static void wc_handleRoot() {
 static void wc_handleSend() {
   if (wc_server.hasArg("m")) {
     wc_addMessage(wc_server.arg("m"));
+    tn_log("WIOCHAT", String("Message: ") + wc_server.arg("m"));
   }
   wc_sendNoCacheHeaders();
   wc_server.send(200, "text/plain", "OK");
@@ -2258,6 +2406,7 @@ static void wc_startChat() {
   wc_server.begin();
   wc_badgeText = wc_apPassword;
   wc_chatOn    = true;
+  tn_log("WIOCHAT", String("AP started SSID=WioChat IP=") + wc_apIP.toString());
 }
 
 static void wc_stopChat() {
@@ -2269,6 +2418,7 @@ static void wc_stopChat() {
   wc_badgeText    = "STOPPED";
   wc_stoppedFlash = true;
   wc_stoppedUntil = millis() + 1500;
+  tn_log("WIOCHAT", "AP stopped");
 }
 
 static void wc_enter() {
@@ -2278,6 +2428,8 @@ static void wc_enter() {
   wc_badgeText    = "READY";
   wc_msgCount     = 0;
   wc_drawFullUI();
+  tn_logAppEnter(APP_WIOCHAT);
+  tn_log("WIOCHAT", "App ready");
 }
 
 static void wc_loop() {
@@ -2287,13 +2439,13 @@ static void wc_loop() {
     wc_drawFullUI();
   }
 
-  if (keys.pressed(MASK_JOY_OK)) {  // toggle chat on/off
+  if (keys.pressed(MASK_JOY_OK)) {
     if (!wc_chatOn) wc_startChat();
     else            wc_stopChat();
     wc_drawFullUI();
   }
 
-  if (keys.pressed(MASK_BTN_C)) {  // stop if running, else exit to menu
+  if (keys.pressed(MASK_BTN_C)) {
     if (wc_chatOn) {
       wc_stopChat();
       wc_drawFullUI();
@@ -2301,8 +2453,10 @@ static void wc_loop() {
       WiFi.mode(WIFI_STA);
       WiFi.disconnect();
       delay(50);
+      tn_logAppExit(APP_WIOCHAT);
       app = APP_MENU;
       menu_draw();
+      tn_logAppEnter(APP_MENU);
     }
   }
 
@@ -2522,6 +2676,7 @@ static void wd_handleDownload() {
 
   String name = wd_sanitizeFileName(wd_server.arg("f"));
   String path = "/" + name;
+  tn_log("WIODROP", String("Download request: ") + path);
 
   File f = SD.open(path.c_str(), FILE_READ);
   if (!f) { wd_server.send(404, "text/plain", "Not found"); return; }
@@ -2538,6 +2693,7 @@ static void wd_handleDelete() {
 
   String name = wd_sanitizeFileName(wd_server.arg("f"));
   String path = "/" + name;
+  tn_log("WIODROP", String("Delete request: ") + path);
 
   if (SD.exists(path.c_str())) SD.remove(path.c_str());
 
@@ -2562,15 +2718,20 @@ static void wd_handleUploadStream() {
 
     if (SD.exists(path.c_str())) SD.remove(path.c_str());
     wd_uploadFile = SD.open(path.c_str(), FILE_WRITE);
+    tn_log("WIODROP", String("Upload start: ") + wd_uploadName);
   }
   else if (up.status == UPLOAD_FILE_WRITE) {
     if (!wd_uploadFile) return;
-    if (up.currentSize) wd_uploadFile.write(up.buf, up.currentSize);
+    if (up.currentSize) {
+      wd_uploadFile.write(up.buf, up.currentSize);
+      tn_log("WIODROP", String("Upload chunk: ") + wd_uploadName + " +" + String(up.currentSize) + " bytes");
+    }
   }
   else if (up.status == UPLOAD_FILE_END) {
     if (wd_uploadFile) {
       wd_uploadFile.flush();
       wd_uploadFile.close();
+      tn_log("WIODROP", String("Upload complete: ") + wd_uploadName);
     }
   }
   else if (up.status == UPLOAD_FILE_ABORTED) {
@@ -2579,6 +2740,7 @@ static void wd_handleUploadStream() {
       String path = "/" + wd_uploadName;
       if (SD.exists(path.c_str())) SD.remove(path.c_str());
     }
+    tn_log("WIODROP", String("Upload aborted: ") + wd_uploadName);
   }
 }
 
@@ -2679,6 +2841,7 @@ static void wd_start() {
 
   wd_badgeText = wd_apPassword;
   wd_on = true;
+  tn_log("WIODROP", String("AP started SSID=WioDrop IP=") + wd_apIP.toString());
 }
 
 static void wd_stop() {
@@ -2691,6 +2854,7 @@ static void wd_stop() {
   wd_badgeText    = "STOPPED";
   wd_stoppedFlash = true;
   wd_stoppedUntil = millis() + 1500;
+  tn_log("WIODROP", "AP stopped");
 }
 
 static void wd_enter() {
@@ -2703,6 +2867,8 @@ static void wd_enter() {
   wd_sdOk = SD.begin(SDCARD_SS_PIN, SDCARD_SPI);
 
   wd_drawFullUI();
+  tn_logAppEnter(APP_WIODROP);
+  tn_log("WIODROP", String("App ready, SD=") + (wd_sdOk ? "OK" : "ERROR"));
 }
 
 static void wd_loop() {
@@ -2718,7 +2884,6 @@ static void wd_loop() {
     wd_drawFullUI();
   }
 
-  // LB: stop if running, else exit to menu (same behavior pattern as Wio Chat)
   if (keys.pressed(MASK_BTN_C)) {
     if (wd_on) {
       wd_stop();
@@ -2727,8 +2892,10 @@ static void wd_loop() {
       WiFi.mode(WIFI_STA);
       WiFi.disconnect();
       delay(50);
+      tn_logAppExit(APP_WIODROP);
       app = APP_MENU;
       menu_draw();
+      tn_logAppEnter(APP_MENU);
     }
   }
 
@@ -3058,10 +3225,14 @@ static void sdtool_enter() {
   if (!sdtool_sd_ok) {
     sdtool_setStatus("ERROR", "SD card not detected. Insert SD card and restart.");
     sdtool_draw();
+    tn_logAppEnter(APP_SDTOOL);
+    tn_log("SDTOOL", String("Enter, SD=") + (sdtool_sd_ok ? "OK" : "ERROR"));
     return;
   }
 
   sdtool_refresh("");
+  tn_logAppEnter(APP_SDTOOL);
+  tn_log("SDTOOL", String("Enter, SD=") + (sdtool_sd_ok ? "OK" : "ERROR"));
 }
 
 static void sdtool_copyOrMoveSelected(bool move) {
@@ -3078,6 +3249,7 @@ static void sdtool_copyOrMoveSelected(bool move) {
   sdtool_cb_isDir = sdtool_isDir[sdtool_s];
   sdtool_cb_path = path;
 
+  tn_log("SDTOOL", String(move ? "Move queued: " : "Copy queued: ") + path);
   sdtool_refresh(move ? "Move selected" : "Copied");
 }
 
@@ -3085,10 +3257,12 @@ static void sdtool_pasteAction() {
   if (!sdtool_sd_ok) return;
   if (!sdtool_cb_has) { sdtool_refresh("Clipboard empty"); return; }
 
-  String dest = sdtool_dir; // always paste into current directory
+  String dest = sdtool_dir;
 
   sdtool_setStatus("READY", "Pasting...");
   sdtool_draw();
+
+  tn_log("SDTOOL", String("Paste into: ") + dest);
 
   String err;
   if (!sdtool_pasteInto(dest, &err)) {
@@ -3114,21 +3288,27 @@ static void sdtool_loop() {
     sdtool_draw();
   }
 
-  // LB: Back/Exit
   if (keys.pressed(MASK_BTN_C)) {
-    if (!sdtool_sd_ok) { app = APP_MENU; menu_draw(); return; }
+    if (!sdtool_sd_ok) {
+      tn_logAppExit(APP_SDTOOL);
+      app = APP_MENU;
+      menu_draw();
+      tn_logAppEnter(APP_MENU);
+      return;
+    }
     if (sdtool_dir != "/") {
       sdtool_dir = sdtool_parentDir(sdtool_dir);
       sdtool_s = 0; sdtool_scroll = 0;
       sdtool_refresh("");
     } else {
+      tn_logAppExit(APP_SDTOOL);
       app = APP_MENU;
       menu_draw();
+      tn_logAppEnter(APP_MENU);
       return;
     }
   }
 
-  // RB: Delete
   if (keys.pressed(MASK_BTN_A)) {
     if (!sdtool_sd_ok) return;
     if (sdtool_c <= 0) return;
@@ -3141,6 +3321,8 @@ static void sdtool_loop() {
     sdtool_setStatus("READY", "Deleting...");
     sdtool_draw();
 
+    tn_log("SDTOOL", String("Delete: ") + path);
+
     String err;
     if (!sdtool_rmTree(path, &err)) {
       sdtool_setStatus("ERROR", err);
@@ -3150,28 +3332,25 @@ static void sdtool_loop() {
     }
   }
 
-  // L: Move
   if (keys.pressed(MASK_JOY_LEFT)) {
     sdtool_copyOrMoveSelected(true);
   }
 
-  // R: Copy
   if (keys.pressed(MASK_JOY_RIGHT)) {
     sdtool_copyOrMoveSelected(false);
   }
 
-  // MB: Paste
   if (keys.pressed(MASK_BTN_B)) {
     sdtool_pasteAction();
   }
 
-  // OK: Open directory / Back
   if (keys.pressed(MASK_JOY_OK)) {
     if (!sdtool_sd_ok) return;
     if (sdtool_c <= 0) return;
 
     String name = sdtool_name[sdtool_s];
     if (sdtool_isDir[sdtool_s]) {
+      tn_log("SDTOOL", String("Open dir: ") + name);
       if (name == "Back") sdtool_dir = sdtool_parentDir(sdtool_dir);
       else                sdtool_dir = sdtool_join(sdtool_dir, name);
 
@@ -3193,11 +3372,25 @@ void setup() {
   pinMode(JOY_LEFT,  INPUT_PULLUP);
   pinMode(JOY_RIGHT, INPUT_PULLUP);
   pinMode(JOY_OK,    INPUT_PULLUP);
-  Serial.begin(115200);
+
+  Serial.begin(TN_SERIAL_BAUD);
+  uint32_t serialStart = millis();
+  while (!Serial && (millis() - serialStart) < TN_SERIAL_WAIT_MS) { delay(10); }
+  tn_serialReady = true;
+
+  tn_log("BOOT", "TechNet boot start");
+  tn_logf("BOOT", "Firmware", "TechNet");
+  tn_logf("BOOT", "Baud", String(TN_SERIAL_BAUD));
+
   tft.begin();
   tft.setRotation(3);
+  tn_log("DISPLAY", "TFT initialized, rotation=3");
+
   drawBootLogo();
+  tn_log("BOOT", "Boot logo drawn");
+
   menu_draw();
+  tn_logAppEnter(APP_MENU);
 }
 
 void loop() {
@@ -3271,7 +3464,7 @@ void loop() {
       break;
     }
 
-        case APP_SDTOOL: {
+    case APP_SDTOOL: {
       static bool entered = false;
       if (!entered) { sdtool_enter(); entered = true; }
       sdtool_loop();
