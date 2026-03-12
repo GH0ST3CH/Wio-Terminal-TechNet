@@ -21,6 +21,8 @@
 #include <rpcBLEDevice.h>
 #include <TFT_eSPI.h>
 #include <SPI.h>
+#include <Wire.h>
+#include <SparkFunBQ27441.h>
 #include <Seeed_FS.h>
 #include "SD/Seeed_SD.h"
 #include "Keyboard.h"
@@ -53,16 +55,32 @@ static const int W = 320;
 static const int H = 240;
 
 // ======= Named UI layout constants =======
+static const uint16_t COLOR_BATTBAR_BG  = 0x1082; // very subtle upper battery strip
 static const uint16_t COLOR_HEADER_BG   = 0x2104; // dark blue-grey header background
 static const uint16_t COLOR_FOOTER_BG   = 0x1082; // darker blue-grey footer background
 static const uint16_t COLOR_SELECTED_BG = 0x4208; // highlight row background (dark highlight)
 static const uint16_t COLOR_TOGGLE_OFF  = 0x39E7; // toggle switch off-state colour
 
-static const int UI_HEADER_H  = 45;  // height of the top header bar
-static const int UI_FOOTER_Y  = 215; // Y-position of the bottom footer bar
-static const int UI_FOOTER_H  = 25;  // height of the footer bar
-static const int UI_CONTENT_Y = 45;  // top of the scrollable content area
-static const int UI_CONTENT_H = 170; // height of the scrollable content area
+static const int UI_BATTBAR_H   = 12;  // tiny battery strip above main header
+static const int UI_MAIN_HDR_Y  = 12;  // main header begins below battery strip
+static const int UI_MAIN_HDR_H  = 45;  // old header height
+static const int UI_HEADER_H    = 57;  // total top area
+static const int UI_FOOTER_Y    = 215; // Y-position of the bottom footer bar
+static const int UI_FOOTER_H    = 25;  // height of the footer bar
+static const int UI_CONTENT_Y   = 57;  // top of the scrollable content area
+static const int UI_CONTENT_H   = 158; // height of the scrollable content area
+
+// ======= Battery / Fuel Gauge =======
+static const unsigned int TN_BATT_CAPACITY_MAH = 650; // Seeed battery chassis wiki value
+static const uint32_t TN_BATT_POLL_MS = 1500;
+
+static bool     tn_battGaugeReady = false;
+static bool     tn_battDetected   = false;
+static bool     tn_battCharging   = false;
+static uint8_t  tn_battPercent    = 0;
+static uint16_t tn_battVoltageMv  = 0;
+static int      tn_battCurrentMa  = 0;
+static uint32_t tn_battLastPollMs = 0;
 
 // ======= App framework =======
 enum AppId { APP_MENU, APP_CHANNEL_MONITOR, APP_SSID_MONITOR, APP_SSID_SCAN, APP_BT_MONITOR, APP_BT_SCAN, APP_BADUSB, APP_WIOCHAT, APP_WIODROP, APP_SDTOOL };
@@ -134,22 +152,98 @@ static const uint16_t MASK_JOY_LEFT  = 0x0040;
 static const uint16_t MASK_JOY_RIGHT = 0x0080;
 static const uint16_t MASK_JOY_OK    = 0x0100;
 
+// ======= Battery Helpers =======
+static uint16_t tn_battColorForPercent(int pct) {
+  if (pct <= 20) return TFT_RED;
+  if (pct <= 60) return TFT_YELLOW;
+  return TFT_GREEN;
+}
+
+static void tn_battInit() {
+  Wire.begin();
+
+  if (lipo.begin()) {
+    lipo.setCapacity(TN_BATT_CAPACITY_MAH);
+    tn_battGaugeReady = true;
+    tn_battDetected   = true;
+    tn_log("BATT", "BQ27441 initialized");
+  } else {
+    tn_battGaugeReady = false;
+    tn_battDetected   = false;
+    tn_log("BATT", "BQ27441 not detected");
+  }
+}
+
+static void tn_battPoll(bool force = false) {
+  uint32_t now = millis();
+  if (!force && (now - tn_battLastPollMs) < TN_BATT_POLL_MS) return;
+  tn_battLastPollMs = now;
+
+  if (!tn_battGaugeReady) {
+    tn_battDetected = false;
+    return;
+  }
+
+  unsigned int soc = lipo.soc();
+  unsigned int voltage = lipo.voltage();
+  int current = lipo.current(AVG);
+
+  if (soc > 100 || voltage < 2500 || voltage > 5000) {
+    tn_battDetected = false;
+    return;
+  }
+
+  tn_battDetected  = true;
+  tn_battPercent   = (uint8_t)soc;
+  tn_battVoltageMv = (uint16_t)voltage;
+  tn_battCurrentMa = current;
+  tn_battCharging  = (current > 0);
+}
+
+static String tn_battStatusText() {
+  if (!tn_battDetected) return "BAT%: N/A";
+  String s = "BAT%: " + String((int)tn_battPercent);
+  if (tn_battCharging) s += " charging";
+  return s;
+}
+
+static void tn_drawBatteryStrip() {
+  tn_battPoll(false);
+
+  tft.fillRect(0, 0, W, UI_BATTBAR_H, COLOR_BATTBAR_BG);
+  tft.setTextSize(1);
+
+  String label = tn_battStatusText();
+  int textWidth = label.length() * 6;
+
+  if (!tn_battDetected) {
+    tft.setTextColor(TFT_LIGHTGREY, COLOR_BATTBAR_BG);
+  } else {
+    tft.setTextColor(tn_battColorForPercent(tn_battPercent), COLOR_BATTBAR_BG);
+  }
+
+  tft.setCursor(W - 6 - textWidth, 2);
+  tft.print(label);
+}
+
 // ======= UI Helpers =======
 static void drawSkinHeader(String title, String status = "", uint16_t statusColor = TFT_CYAN) {
-  tft.fillRect(0, 0, W, UI_HEADER_H, COLOR_HEADER_BG);
-  tft.setTextColor(TFT_WHITE);
+  tn_drawBatteryStrip();
+
+  tft.fillRect(0, UI_MAIN_HDR_Y, W, UI_MAIN_HDR_H, COLOR_HEADER_BG);
+  tft.setTextColor(TFT_WHITE, COLOR_HEADER_BG);
   tft.setTextSize(2);
 
   // Default: LEFT aligned
-  tft.setCursor(15, 15);
+  tft.setCursor(15, UI_MAIN_HDR_Y + 15);
   tft.print(title);
 
   if (status != "") {
-    tft.fillRoundRect(200, 10, 110, 25, 4, statusColor);
-    tft.setTextColor(TFT_BLACK);
+    tft.fillRoundRect(200, UI_MAIN_HDR_Y + 10, 110, 25, 4, statusColor);
+    tft.setTextColor(TFT_BLACK, statusColor);
     tft.setTextSize(1);
     int textWidth = status.length() * 6;
-    tft.setCursor(200 + (110 - textWidth) / 2, 18);
+    tft.setCursor(200 + (110 - textWidth) / 2, UI_MAIN_HDR_Y + 18);
     tft.print(status);
   }
 }
@@ -265,7 +359,7 @@ static uint8_t menuCat = CAT_WIFI;
 static int menuIndex = 0;
 static int menuScroll = 0;
 
-static const int MENU_ROW0_Y   = 62;
+static const int MENU_ROW0_Y   = 71;
 static const int MENU_ROW_STEP = 30;
 static const int MENU_VISIBLE  = 5;
 
@@ -320,13 +414,15 @@ static void drawMenuItems(const char** items, int count, int selectedIndex) {
 }
 
 static void menu_drawHeaderOnce() {
-  tft.fillRect(0, 0, W, UI_HEADER_H, COLOR_HEADER_BG);
+  tn_drawBatteryStrip();
+
+  tft.fillRect(0, UI_MAIN_HDR_Y, W, UI_MAIN_HDR_H, COLOR_HEADER_BG);
 
   tft.setTextSize(3);
   tft.setTextColor(TFT_LIGHTGREY, COLOR_HEADER_BG);
-  tft.setCursor(7, 13);
+  tft.setCursor(7, UI_MAIN_HDR_Y + 13);
   tft.print("<");
-  tft.setCursor(297, 13);
+  tft.setCursor(297, UI_MAIN_HDR_Y + 13);
   tft.print(">");
 }
 
@@ -336,15 +432,15 @@ static void menu_drawTitleOnly() {
                  (menuCat == CAT_USB)   ? "USB Apps"   :
                                           "Other Apps";
 
-  tft.fillRect(40, 0, W - 80, UI_HEADER_H, COLOR_HEADER_BG);
+  tft.fillRect(40, UI_MAIN_HDR_Y, W - 80, UI_MAIN_HDR_H, COLOR_HEADER_BG);
 
-  tft.setTextColor(TFT_CYAN);
+  tft.setTextColor(TFT_CYAN, COLOR_HEADER_BG);
   tft.setTextSize(3);
   int titleWidth = title.length() * 17;
   int x = (W - titleWidth) / 2;
   if (x < 40) x = 40;
   if (x > (W - 40 - titleWidth)) x = (W - 40 - titleWidth);
-  tft.setCursor(x, 13);
+  tft.setCursor(x, UI_MAIN_HDR_Y + 13);
   tft.print(title);
 }
 
@@ -515,7 +611,7 @@ static void cm_draw() {
 
   for (int i = 0; i < nCh; i++) {
     int x = startX + i * (drawW + gap);
-    int h = map(cm_apCount[chans[i]], 0, 20, 0, 120);
+    int h = map(cm_apCount[chans[i]], 0, 20, 0, 108);
 
     tft.fillRect(x, 184 - h, drawW, h, TFT_WHITE);
 
@@ -620,17 +716,17 @@ static const int MON_SSID_MAX_CHARS = 22;
 
 static const int MON_DETAIL_MAX_CHARS = 18;
 
-static const int MON_HDR_Y    = 52;
-static const int MON_ROW0_Y   = 74;
+static const int MON_HDR_Y    = 64;
+static const int MON_ROW0_Y   = 86;
 static const int MON_ROW_STEP = 18;
 static const int MON_HI_PAD_Y = 4;
 
 static const int MON_DET_X_LABEL = 10;
-static const int MON_DET_Y_SSID  = 60;
-static const int MON_DET_Y_MAC   = 90;
-static const int MON_DET_Y_CH    = 120;
-static const int MON_DET_Y_BAND  = 150;
-static const int MON_DET_Y_RSSI  = 180;
+static const int MON_DET_Y_SSID  = 72;
+static const int MON_DET_Y_MAC   = 102;
+static const int MON_DET_Y_CH    = 132;
+static const int MON_DET_Y_BAND  = 162;
+static const int MON_DET_Y_RSSI  = 192;
 
 static const int MON_DET_RSSI_VAL_X   = 10 + (6 * 12);
 static const int MON_DET_RSSI_CLEAR_W = 320 - 20 - MON_DET_RSSI_VAL_X;
@@ -746,12 +842,12 @@ static void mon_drawDetailFull() {
 static void mon_updateDetailRSSIOnly() {
   if (mon_detail.rssi == mon_lastDetailRSSI) return;
 
-  tft.fillRoundRect(200, 10, 110, 25, 4, TFT_CYAN);
-  tft.setTextColor(TFT_BLACK);
+  tft.fillRoundRect(200, UI_MAIN_HDR_Y + 10, 110, 25, 4, TFT_CYAN);
+  tft.setTextColor(TFT_BLACK, TFT_CYAN);
   tft.setTextSize(1);
   String status = String(mon_detail.rssi) + " dBm";
   int textWidth = status.length() * 6;
-  tft.setCursor(200 + (110 - textWidth) / 2, 18);
+  tft.setCursor(200 + (110 - textWidth) / 2, UI_MAIN_HDR_Y + 18);
   tft.print(status);
 
   tft.fillRect(MON_DET_RSSI_VAL_X, MON_DET_Y_RSSI - 2, MON_DET_RSSI_CLEAR_W, 18, TFT_BLACK);
@@ -914,8 +1010,8 @@ static const int SS_COL_RSSI_X = 265;
 
 static const int SS_SSID_MAX_CHARS = 22;
 
-static const int SS_HDR_Y    = 52;
-static const int SS_ROW0_Y   = 74;
+static const int SS_HDR_Y    = 64;
+static const int SS_ROW0_Y   = 86;
 static const int SS_ROW_STEP = 18;
 static const int SS_HI_PAD_Y = 4;
 
@@ -958,11 +1054,11 @@ static void ss_draw() {
     if (s == "") s = "<HIDDEN>";
     if (s.length() > 24) s = s.substring(0, 24) + "...";
 
-    tft.setCursor(10, 60);  tft.print("SSID: "); tft.print(s);
-    tft.setCursor(10, 90);  tft.print("MAC: ");  tft.print(ap.bssid);
-    tft.setCursor(10, 120); tft.print("CH: ");   tft.print(ap.ch);
-    tft.setCursor(10, 150); tft.print("Band: "); tft.print(ap.is5G ? "5GHz" : "2.4GHz");
-    tft.setCursor(10, 180); tft.print("RSSI: "); tft.print(ap.rssi); tft.print(" dBm");
+    tft.setCursor(10, 72);  tft.print("SSID: "); tft.print(s);
+    tft.setCursor(10, 102); tft.print("MAC: ");  tft.print(ap.bssid);
+    tft.setCursor(10, 132); tft.print("CH: ");   tft.print(ap.ch);
+    tft.setCursor(10, 162); tft.print("Band: "); tft.print(ap.is5G ? "5GHz" : "2.4GHz");
+    tft.setCursor(10, 192); tft.print("RSSI: "); tft.print(ap.rssi); tft.print(" dBm");
 
     drawSkinFooter("Press any button to return");
     return;
@@ -1158,17 +1254,17 @@ static const int BT_VISIBLE = 8;
 static const int BT_COL_MAC_X  = 15;
 static const int BT_COL_RSSI_X = 250;
 
-static const int BT_HDR_Y    = 52;
-static const int BT_ROW0_Y   = 74;
+static const int BT_HDR_Y    = 64;
+static const int BT_ROW0_Y   = 86;
 static const int BT_ROW_STEP = 18;
 static const int BT_HI_PAD_Y = 4;
 
 static const int BT_LIST_LABEL_MAX_CHARS = 20;
 
 static const int BT_DET_X_LABEL = 10;
-static const int BT_DET_Y_NAME  = 62;
-static const int BT_DET_Y_MAC   = 92;
-static const int BT_DET_Y_RSSI  = 122;
+static const int BT_DET_Y_NAME  = 72;
+static const int BT_DET_Y_MAC   = 102;
+static const int BT_DET_Y_RSSI  = 132;
 
 static const int BT_DET_RSSI_VAL_X   = BT_DET_X_LABEL + (6 * 12);
 static const int BT_DET_RSSI_CLEAR_W = 320 - 10 - BT_DET_RSSI_VAL_X;
@@ -1288,12 +1384,12 @@ static void bt_tryResolveNameForDetail() {
 static void bt_updateDetailRSSIOnly() {
   if (bt_detail.rssi == bt_lastDetailRSSI) return;
 
-  tft.fillRoundRect(200, 10, 110, 25, 4, TFT_CYAN);
-  tft.setTextColor(TFT_BLACK);
+  tft.fillRoundRect(200, UI_MAIN_HDR_Y + 10, 110, 25, 4, TFT_CYAN);
+  tft.setTextColor(TFT_BLACK, TFT_CYAN);
   tft.setTextSize(1);
   String status = String(bt_detail.rssi) + " dBm";
   int textWidth = status.length() * 6;
-  tft.setCursor(200 + (110 - textWidth) / 2, 18);
+  tft.setCursor(200 + (110 - textWidth) / 2, UI_MAIN_HDR_Y + 18);
   tft.print(status);
 
   tft.fillRect(BT_DET_RSSI_VAL_X, BT_DET_Y_RSSI - 2, BT_DET_RSSI_CLEAR_W, 18, TFT_BLACK);
@@ -1497,17 +1593,17 @@ static const int BTS_VISIBLE = 8;
 static const int BTS_COL_MAC_X  = 15;
 static const int BTS_COL_RSSI_X = 250;
 
-static const int BTS_HDR_Y    = 52;
-static const int BTS_ROW0_Y   = 74;
+static const int BTS_HDR_Y    = 64;
+static const int BTS_ROW0_Y   = 86;
 static const int BTS_ROW_STEP = 18;
 static const int BTS_HI_PAD_Y = 4;
 
 static const int BTS_LIST_LABEL_MAX_CHARS = 20;
 
 static const int BTS_DET_X_LABEL = 10;
-static const int BTS_DET_Y_NAME  = 62;
-static const int BTS_DET_Y_MAC   = 92;
-static const int BTS_DET_Y_RSSI  = 122;
+static const int BTS_DET_Y_NAME  = 72;
+static const int BTS_DET_Y_MAC   = 102;
+static const int BTS_DET_Y_RSSI  = 132;
 
 static void bts_drawScrollBar(int total, int start) {
   const int x = 308;
@@ -1744,26 +1840,26 @@ static uint8_t bu_lookupKey(const String& token) {
 
   // Modifiers
   if (t == "CTRL"   || t == "CONTROL")                                return KEY_LEFT_CTRL;
-  if (t == "RCTRL"  || t == "RIGHTCTRL"  || t == "RIGHTCONTROL")     return KEY_RIGHT_CTRL;
+  if (t == "RCTRL"  || t == "RIGHTCTRL"  || t == "RIGHTCONTROL")      return KEY_RIGHT_CTRL;
   if (t == "SHIFT")                                                    return KEY_LEFT_SHIFT;
   if (t == "RSHIFT" || t == "RIGHTSHIFT")                             return KEY_RIGHT_SHIFT;
   if (t == "ALT")                                                      return KEY_LEFT_ALT;
-  if (t == "RALT"   || t == "RIGHTALT"   || t == "ALTGR")            return KEY_RIGHT_ALT;
+  if (t == "RALT"   || t == "RIGHTALT"   || t == "ALTGR")             return KEY_RIGHT_ALT;
   if (t == "GUI"    || t == "WINDOWS"    || t == "COMMAND" || t == "META") return KEY_LEFT_GUI;
-  if (t == "RGUI"   || t == "RIGHTGUI"  || t == "RIGHTWINDOWS")      return KEY_RIGHT_GUI;
+  if (t == "RGUI"   || t == "RIGHTGUI"  || t == "RIGHTWINDOWS")       return KEY_RIGHT_GUI;
 
   // Navigation & editing
-  if (t == "ENTER"     || t == "RETURN")                              return KEY_RETURN;
-  if (t == "TAB")                                                      return KEY_TAB;
-  if (t == "SPACE")                                                    return ' ';
-  if (t == "BACKSPACE" || t == "BKSP")                                return KEY_BACKSPACE;
-  if (t == "DELETE"    || t == "DEL")                                 return KEY_DELETE;
-  if (t == "INSERT"    || t == "INS")                                 return KEY_INSERT;
-  if (t == "HOME")                                                     return KEY_HOME;
-  if (t == "END")                                                      return KEY_END;
-  if (t == "PAGEUP"    || t == "PAGE_UP"   || t == "PGUP")           return KEY_PAGE_UP;
-  if (t == "PAGEDOWN"  || t == "PAGE_DOWN" || t == "PGDN")           return KEY_PAGE_DOWN;
-  if (t == "ESCAPE"    || t == "ESC")                                 return KEY_ESC;
+  if (t == "ENTER"     || t == "RETURN")                               return KEY_RETURN;
+  if (t == "TAB")                                                       return KEY_TAB;
+  if (t == "SPACE")                                                     return ' ';
+  if (t == "BACKSPACE" || t == "BKSP")                                 return KEY_BACKSPACE;
+  if (t == "DELETE"    || t == "DEL")                                  return KEY_DELETE;
+  if (t == "INSERT"    || t == "INS")                                  return KEY_INSERT;
+  if (t == "HOME")                                                      return KEY_HOME;
+  if (t == "END")                                                       return KEY_END;
+  if (t == "PAGEUP"    || t == "PAGE_UP"   || t == "PGUP")             return KEY_PAGE_UP;
+  if (t == "PAGEDOWN"  || t == "PAGE_DOWN" || t == "PGDN")             return KEY_PAGE_DOWN;
+  if (t == "ESCAPE"    || t == "ESC")                                  return KEY_ESC;
 
   // Arrow keys
   if (t == "UP"    || t == "UPARROW")    return KEY_UP_ARROW;
@@ -1772,7 +1868,7 @@ static uint8_t bu_lookupKey(const String& token) {
   if (t == "RIGHT" || t == "RIGHTARROW") return KEY_RIGHT_ARROW;
 
   // Lock keys
-  if (t == "CAPSLOCK"   || t == "CAPS_LOCK")  return KEY_CAPS_LOCK;
+  if (t == "CAPSLOCK"   || t == "CAPS_LOCK")   return KEY_CAPS_LOCK;
   if (t == "NUMLOCK"    || t == "NUM_LOCK")    return KEY_NUM_LOCK;
   if (t == "SCROLLLOCK" || t == "SCROLL_LOCK") return KEY_SCROLL_LOCK;
 
@@ -1963,7 +2059,7 @@ static void bu_draw(const String& stOverride = "", const String& msgOverride = "
 
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITE);
-  tft.setCursor(15, 60);
+  tft.setCursor(15, 72);
   tft.print("SELECT PAYLOAD:");
 
   const int visible = 5;
@@ -1972,7 +2068,7 @@ static void bu_draw(const String& stOverride = "", const String& msgOverride = "
 
   for (int row = 0; row < (end - start); row++) {
     int i = start + row;
-    int y = 90 + row * 22;
+    int y = 102 + row * 22;
     if (i == bu_s) {
       tft.fillRoundRect(10, y - 6, 300, 20, 4, COLOR_SELECTED_BG);
       tft.setTextColor(TFT_YELLOW);
@@ -2341,10 +2437,10 @@ static void wc_drawFooter(String txt) {
 }
 
 static void wc_drawSwitch() {
-  tft.fillRect(0, 60, W, 140, TFT_BLACK);
+  tft.fillRect(0, 72, W, 128, TFT_BLACK);
 
   const int pillW = 100, pillH = 34;
-  int       px    = (W - pillW) / 2, py = 85;
+  int       px    = (W - pillW) / 2, py = 92;
 
   uint16_t col = wc_chatOn ? TFT_GREEN : COLOR_TOGGLE_OFF;
   tft.fillRoundRect(px, py, pillW, pillH, 17, col);
@@ -2365,9 +2461,9 @@ static void wc_drawSwitch() {
   String l1 = "Connect to Access Point: WioChat";
   String l2 = "Wi-Fi Password: code (top-right)";
   String l3 = "Go to http://WioChat.com";
-  tft.setCursor((W - l1.length() * 6) / 2, 140); tft.print(l1);
-  tft.setCursor((W - l2.length() * 6) / 2, 155); tft.print(l2);
-  tft.setCursor((W - l3.length() * 6) / 2, 170); tft.print(l3);
+  tft.setCursor((W - l1.length() * 6) / 2, 147); tft.print(l1);
+  tft.setCursor((W - l2.length() * 6) / 2, 162); tft.print(l2);
+  tft.setCursor((W - l3.length() * 6) / 2, 177); tft.print(l3);
 
   wc_drawFooter("LB:Stop/Exit   OK:Toggle");
 }
@@ -2762,10 +2858,10 @@ static void wd_drawHeader(String text) {
 static void wd_drawFooter(String txt) { drawSkinFooter(txt); }
 
 static void wd_drawSwitch() {
-  tft.fillRect(0, 60, W, 140, TFT_BLACK);
+  tft.fillRect(0, 72, W, 128, TFT_BLACK);
 
   const int pillW = 110, pillH = 34;
-  int px = (W - pillW) / 2, py = 85;
+  int px = (W - pillW) / 2, py = 92;
 
   uint16_t col = wd_on ? TFT_GREEN : COLOR_TOGGLE_OFF;
   tft.fillRoundRect(px, py, pillW, pillH, 17, col);
@@ -2786,12 +2882,12 @@ static void wd_drawSwitch() {
   String l1 = "Connect to Access Point: WioDrop";
   String l2 = "Wi-Fi Password: code (top-right)";
   String l3 = "Go to http://WioDrop.com";
-  tft.setCursor((W - l1.length() * 6) / 2, 140); tft.print(l1);
-  tft.setCursor((W - l2.length() * 6) / 2, 155); tft.print(l2);
-  tft.setCursor((W - l3.length() * 6) / 2, 170); tft.print(l3);
+  tft.setCursor((W - l1.length() * 6) / 2, 147); tft.print(l1);
+  tft.setCursor((W - l2.length() * 6) / 2, 162); tft.print(l2);
+  tft.setCursor((W - l3.length() * 6) / 2, 177); tft.print(l3);
 
   String l4 = wd_sdOk ? "SD Status: OK" : "SD Status: ERROR";
-  tft.setCursor((W - l4.length() * 6) / 2, 185); tft.print(l4);
+  tft.setCursor((W - l4.length() * 6) / 2, 192); tft.print(l4);
 
   wd_drawFooter("LB:Stop/Exit   OK:Toggle");
 }
@@ -3140,11 +3236,11 @@ static void sdtool_draw() {
 
   tft.setTextColor(TFT_WHITE);
   tft.setTextSize(1);
-  tft.setCursor(12, 52);
+  tft.setCursor(12, 64);
   tft.print("DIRECTORY: ");
   tft.print(sdtool_dir);
 
-  tft.setCursor(12, 64);
+  tft.setCursor(12, 76);
   tft.setTextColor(TFT_LIGHTGREY);
   if (sdtool_cb_has) {
     tft.print("CLIPBOARD: ");
@@ -3160,7 +3256,7 @@ static void sdtool_draw() {
 
   for (int row = 0; row < (end - start); row++) {
     int i = start + row;
-    int y = 88 + row * 22;
+    int y = 100 + row * 22;
 
     if (i == sdtool_s) {
       tft.fillRoundRect(10, y - 6, 300, 20, 4, COLOR_SELECTED_BG);
@@ -3386,6 +3482,9 @@ void setup() {
   tft.setRotation(3);
   tn_log("DISPLAY", "TFT initialized, rotation=3");
 
+  tn_battInit();
+  tn_battPoll(true);
+
   drawBootLogo();
   tn_log("BOOT", "Boot logo drawn");
 
@@ -3395,6 +3494,8 @@ void setup() {
 
 void loop() {
   readInputs();
+  tn_battPoll(false);
+
   switch (app) {
     case APP_MENU:
       menu_loop();
