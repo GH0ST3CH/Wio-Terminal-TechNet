@@ -117,6 +117,14 @@ Select the board:
 
 - **Tools → Board → Wio Terminal**
 
+#### Required Arduino libraries
+
+Install the following library using **Arduino IDE → Library Manager** before compiling:
+
+- **SparkFun BQ27441 LiPo Fuel Gauge Arduino Library**
+
+This library is required for the battery-status header introduced in recent versions of TechNet.
+
 ### 3) Open the firmware
 
 Open:
