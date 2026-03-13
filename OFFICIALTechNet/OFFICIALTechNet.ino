@@ -705,7 +705,7 @@ static String mon_selBSSID = "";
 static MonAPRow mon_detail;
 static int      mon_lastDetailRSSI = 9999;
 
-static const int MON_VISIBLE = 8;
+static const int MON_VISIBLE = 7;
 
 static const int MON_COL_SSID_X = 15;
 static const int MON_COL_CH_X   = 165;
@@ -1001,7 +1001,7 @@ static int  ss_sel        = 0;
 static int  ss_scroll     = 0;
 static bool ss_showDetail = false;
 
-static const int SS_VISIBLE = 8;
+static const int SS_VISIBLE = 7;
 
 static const int SS_COL_SSID_X = 15;
 static const int SS_COL_CH_X   = 165;
@@ -1249,7 +1249,7 @@ static const uint32_t BT_SCAN_PERIOD_MS        = 1000;
 static const uint32_t BT_DETAIL_SCAN_PERIOD_MS = 500;
 static uint32_t       bt_lastDetailScanMs       = 0;
 
-static const int BT_VISIBLE = 8;
+static const int BT_VISIBLE = 7;
 
 static const int BT_COL_MAC_X  = 15;
 static const int BT_COL_RSSI_X = 250;
@@ -1588,7 +1588,7 @@ static bool bts_showDetail = false;
 
 static bool bts_inited = false;
 
-static const int BTS_VISIBLE = 8;
+static const int BTS_VISIBLE = 7;
 
 static const int BTS_COL_MAC_X  = 15;
 static const int BTS_COL_RSSI_X = 250;
